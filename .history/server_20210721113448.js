@@ -1,0 +1,477 @@
+const express = require("express");
+const app = express();
+const mysql = require('mysql2');
+const bodyParser = require('body-parser');
+const emailApi = require('./client/src/components/email.js')
+const stockApi = require('./client/src/finnhubApi.js');
+// const eodApi=require('./client/src/components/service')
+const request = require('request');
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ 
+    extended: true
+}));
+app.timeout = 0;
+
+//open the database
+
+let db = mysql.createConnection({
+  host: "localhost",
+  user: "root",
+  password: "My3sons2@4",
+  port: 3306
+});
+
+db.connect(function(err){ 
+    if(err){
+        console.log(err);  
+        throw err;
+    } 
+    console.log("connected!");
+  });
+  
+//   stockApi.connectWebsocket();
+
+
+
+
+
+  
+//   function MinutesToMilleSeconds(min){
+//       return min*60*1000;
+//   }
+function alertType(identifier,movment){
+    switch(identifier){
+        case 'Price':
+            switch(movment){
+                case 'above':
+                    return 1;
+                case 'below':
+                    return 2;
+                default:
+                    return 0;
+            }
+        case 'Percent':
+            switch(movment){
+                case 'Up':
+                    return 3;
+                case 'Down':
+                    return 4;
+                default:
+                    return 0;
+            }
+        default:
+            return 0;
+    }
+}
+  app.post("/api/RemoveAlerts",function(req,res){
+    var email = req.body.email;
+    var symbol= req.body.symbol;
+    var movment=req.body.movement;
+    var identifier= req.body.identifier;
+    console.log("removeAlert,/46",identifier,movment)
+    
+    var alert_type = alertType(identifier,movment);
+    if(alert_type===0){
+        res.json('something went wrong in switch statement')
+        return res.end();
+    }
+    console.log(email,symbol,alert_type)
+    var sql_delete_alert = "delete from stock_app.user_alerts where email =? and symbol = ? and alert_type=?"
+    db.query(sql_delete_alert,[email,symbol,alert_type],function(err,result){
+        console.log(result)
+        if(err)throw err
+        if(result.affectedRows===0){
+            console.log("There was an error in deletion ")
+            res.json("Nothing delete ")
+        }
+        if(result.affectedRows===1){
+            console.log("Sucesfully deleted");
+            res.json("Sucesfully deleted");
+            res.end();
+        }
+        
+    })
+})
+  app.post("/api/createAlert",function(req,res){
+    var email = req.body.email;
+    var symbol= req.body.symbol;
+    var movment=req.body.movment;
+    var change=req.body.change;
+    var identifier= req.body.identifier;
+    console.log(identifier,movment)
+    function alertType(identifier,movment){
+        switch(identifier){
+            case 'Price':
+                switch(movment){
+                    case 'Above':
+                        return 1;
+                    case 'Below':
+                        return 2;
+                    default:
+                        return 0;
+                }
+            case 'Percent':
+                switch(movment){
+                    case 'Up':
+                        return 3;
+                    case 'Down':
+                        return 4;
+                    default:
+                        return 0;
+                }
+            default:
+                return 0;
+        }
+    }
+    var alert_type = alertType(identifier,movment);
+    if(alert_type===0){
+        res.json('something went wrong in switch statement')
+    }
+    console.log(email,symbol,alert_type,change)
+    var sql_insert_alert = 'Insert Into stock_app.user_alerts values (?,?,?,?);'
+    db.query(sql_insert_alert,[email,symbol,alert_type,change],function(err,result){
+        if(err) throw err;
+        if(result.length===0){
+            console.log("added a new Alert");
+            res.json('New Alert Added');
+            res.end();
+        }
+    })
+
+  })
+  function getUseralerts(email,callback){
+    var getAlertQuery= 'select stock_app.user_alerts.symbol,stock_app.Alerts.Identifier,stock_app.Alerts.movement,stock_app.user_alerts.valuechange from stock_app.user_alerts INNER JOIN stock_app.Alerts on stock_app.user_alerts.alert_type=stock_app.Alerts.id and stock_app.user_alerts.email=?;'
+    db.query(getAlertQuery,[email],callback)
+  };
+  app.post('/api/disableAlert',function(req, res){
+      var email = req.body.email;
+      var alert= req.body.Alert;
+      var active = req.body.active;
+      var sqltoggleAlert = "UPDATE stock_app.user_alerts SET user_alerts.active =? where email = ? and symbol =? and alert_type =?";
+      var alertId= alertType(alert.Identifier,alert.movement);
+      db.query(sqltoggleAlert,[email,alert.symbol,alertId],function(err,result1){
+          if(err)throw err;
+          if(result1.length ===0){
+              console.log("no alert column was updated")
+              res.json("Disable failed")
+              res.end()
+          }
+          else if(result1.length ===1){
+              console.log("alert column was updated")
+              //grab updated alerts
+              var sqlUniqeSymbolQuery= 'select distinct (symbol) from stock_app.user_alerts where email =?;'
+            db.query(sqlUniqeSymbolQuery,[email],function(err,result1){
+                if(err)throw err;
+                if(result1.length==0){
+                    console.log("User has no Alerts");
+                    res.json("ERR No Alerts found");
+                    res.end();
+                }
+                else{
+                    getUseralerts(email,function(err,result2){
+                        if(err) throw err;
+                        if(result2.length>0){
+                            console.log("Found Alerts");
+                        
+                            var Return ={ 
+                                uniqueSymbols:result1,
+                                alerts: result2 
+                            }
+                            res.json(Return)
+                            res.end();
+                        }
+                    })
+                }
+            })
+              
+             
+
+          }
+
+      })
+
+  })
+
+  app.post("/api/UserAlerts",function(req,res){
+      var email = req.body.email;
+      console.log("Inside UseAlerts" ,email);
+      var sqlUniqeSymbolQuery= 'select distinct (symbol) from stock_app.user_alerts where email =?;'
+
+      db.query(sqlUniqeSymbolQuery,[email],function(err,result1){
+        console.log("Result from s/201",result1)
+          if(err)throw err;
+          if(result1.length==0){
+              console.log("User has no Alerts");
+              res.json("No Alerts found");
+              res.end();
+          }
+          else{
+              getUseralerts(email,function(err,result2){
+                 
+                if(err) throw err;
+                if(result2.length>0){
+                    console.log("Found Alerts");
+                 
+                    var Return ={ 
+                        uniqueSymbols:result1,
+                        alerts: result2 
+                    }
+                    console.log("Result from s/219",Return)
+                    res.json(Return)
+                    res.end();
+                }
+              })
+          }
+      })
+      
+    
+  
+  
+    })
+
+
+  app.post('/api/signup', function(req, res){
+    console.log(req.body);
+    var email = req.body.email
+    var password = req.body.password
+    console.log(email,password);
+ 
+    //check if the email is in use, if it is not create the users
+    var sql_email_query= "SELECT * FROM stock_app.users WHERE email=?";
+    db.query(sql_email_query,[email],function(err,result){
+        if(err) throw err;
+        console.log(result);
+        if(result.length == 0){
+            createNewUser(email,password)
+        }
+        else{
+            res.json("Duplicate Email");
+            res.end();
+        }
+    })
+
+    function createNewUser(email,password){
+        var sql_insert_user = "Insert into stock_app.users (email,password) Values (?,?)";
+        db.query(sql_insert_user,[email,password],function(err,result){
+            if(err) throw err;
+            //send confirmation email to users
+            emailApi.confirmation_email(email);
+            res.json("Unconfirmed User Added");
+            res.end()
+        }); 
+    }
+
+});
+
+
+ 
+
+
+
+// app.post('/api/getStockInfo', function(req, res){
+//     var stock_symbol = req.body.stock_to_watch;
+    
+    
+    
+        
+    
+// })
+app.post('/api/AddUserStocks',function(req, res){
+    var email = req.body.email;
+    var addStock= req.body.addStock;
+    console.log("adding stock ", addStock);
+    //check is stock already in stock table
+    var sql_Stock_check = 'SELECT * FROM stock_app.stocks where Symbol = ?';
+    db.query(sql_Stock_check,[addStock],function(err,result){
+        if(err){
+            console.log('Error at query',err);
+            throw err;
+        }
+        console.log("s/99 ",result)
+        if(result.length===0){
+            InsertNewStock(addStock)
+        }
+        else{
+            InsertUserStock(email,addStock,function(ret){
+                res.json(ret);
+                res.end();
+            });
+        }
+    })
+    
+    //insert new stock into stock table if not added already 
+    function InsertNewStock(symbol){
+        stockApi.getEodData(symbol,function(ret){
+            console.log("stockqoute",ret);
+        var sql_new_stock = 'INSERT INTO stock_app.stocks VALUES (?,?,?,?,?,?,?,?,?,?)';
+        db.query(sql_new_stock,[symbol,ret['02. open'],ret['03. high'],ret['04. low'],ret['05. price'],ret['08. previous close'],ret['06. volume'],ret['07. latest trading day'],ret['09. change'],ret['10. change percent']],function(err,result){
+            if(err){
+                console.log('Error at query stock Insert',err);
+                throw err;
+            }
+            else{
+                InsertUserStock(email,addStock,function(ret){
+                    res.json(ret);
+                    res.end();
+                });
+            }
+        })
+    });
+    }
+    //insert stock in user_stocks table if not already added.
+    function InsertUserStock(email,symbol,callback){
+        var sql_already_added_check= 'SELECT * FROM stock_app.user_stocks WHERE email =? and symbol = ?';
+        db.query(sql_already_added_check,[email,addStock],function(err,result){
+            if(err){
+                console.log('Error at sql_already_added_checkt',err);
+                throw err;}
+
+            if(result.length !==0){callback('User had already added this stock')}
+            
+            else{
+                var sql_UserStock_Insert = 'INSERT INTO stock_app.user_stocks VALUES (?,?)';
+
+                db.query(sql_UserStock_Insert,[email,addStock],function(err,result){
+                    if(err){
+                        console.log('Error at query user stock Insert',err);
+                        throw err;
+                    }
+                    else{callback("Successfully Updated");}
+                });
+            }
+        })
+       
+    }
+    
+})
+// app.post('/api/getStockQoute',function(req, res){
+//     var stock = req.body.stockApi;
+//     var sql_stockInfo =' SELECT * from stock_app.stocks where Symbol = ?';
+//     db.query(sql_stockInfo,[stock],function(err,result){
+//         if(err)throw err;
+//         if(result.length === 0){
+//             res.json("no stock information for stock"+stock)
+//             res.end();
+
+//         }
+//         else{
+//             console.log("stockQoute...")
+//             res.json(result)
+//             res.end();
+//         }
+//     })
+
+// })
+app.post('/api/removeUserStock',function(req, res){
+    var email = req.body.email;
+    var stock_to_remove = req.body.stock_symbol;
+    console.log(email,stock_to_remove);
+    var sql_delete_query ='delete from stock_app.user_stocks where email = ? and symbol = ?';
+
+    db.query(sql_delete_query,[email,stock_to_remove],function(err,result){
+        if(err) throw err;
+        if(result ===null){
+            res.json("Stock not on watch list");
+            res.end()
+        }
+        else{
+            var sql_check_delete ='select symbol from stock_app.user_stocks where email = ? and symbol = ?';
+            console.log(sql_check_delete);
+            db.query(sql_check_delete,[email,stock_to_remove],function(err,result){
+                if(err) throw err;
+                if(result.length ===0){
+                    console.log(sql_check_delete);
+                    console.log("Sucessfully removed stock, line 189");
+                    console.log('finding stocks for ',email);
+                    //get the new list of stocks after deleation 
+                    var sql_query = "select Symbol,currentPrice from stock_app.stocks where Symbol in (Select symbol from stock_app.user_stocks where email = ?)"
+                    db.query(sql_query,[email],function(err,result){
+                        if(err){
+                            console.log('Error at query',err);
+                            throw err;
+                        } 
+                        if(result.length === 0){
+                            console.log("User has no stocks added");
+                            res.json("No stocks added")
+                            res.end();
+
+                        }
+                        else{
+                            console.log('users stocks list',result);
+                            res.json({Response:"Sucessfully removed stock",Data:result});
+                            res.end();
+                            
+                            
+                        }
+                    })
+                }
+                else{
+                    res.json("error: Failed to remove stock");
+                    res.end()
+                }
+            });
+            
+        }
+    })
+    
+    
+})
+
+app.post('/api/getUserStocks',function(req,res){ 
+    var email = req.body.email;
+    console.log('finding stocks for ',email);
+    var sql_query = "select * from stock_app.stocks where Symbol in (Select symbol from stock_app.user_stocks where email = ?)"
+    db.query(sql_query,[email],function(err,result){
+        if(err){
+            console.log('Error at query',err);
+            throw err;
+        } 
+        if(result.length === 0){
+            console.log("User has no stocks added");
+            res.json("No stocks added")
+            res.end();
+
+        }
+        else{
+            console.log('users stocks list',result);
+            res.json(result);
+            res.end();
+            return res.json
+        }
+    })
+
+})
+ 
+app.post('/api/loginVerification', function(req, res){
+    var sql_query = "SELECT * FROM stock_app.users WHERE email =?";
+    var email = req.body.email;
+    console.log(email);
+    db.query(sql_query,[email],function(err,result){
+        console.log(result);
+        if(err){
+            console.log("Error at query");
+            throw err;}
+            
+        if (result.length === 0 ){
+            console.log("No User By That Email");
+            res.json("No User By That Email")
+            res.end()
+        }
+
+        else{
+        console.log(result[0],'line 132')
+        res.json(result[0]);
+        res.end();
+       
+        }
+    });
+})
+const port = 5000;
+
+app.listen(port,()=> console.log("port 5000"));
+// if(app.address().port != PORT){
+//     console.log(app.address().port);
+//     app.listen(app.address().port);
+// }
+
+    
